@@ -6,6 +6,7 @@
 //  Copyright © 2017年 sunjianwen. All rights reserved.
 //
 
+#import <Foundation/Foundation.h>
 #import "libimobiledevice.h"
 #import "syslog_relay.h"
 
@@ -25,20 +26,92 @@
 #define sleep(x) Sleep(x*1000)
 #endif
 
+#define LogPath  ([NSHomeDirectory() stringByAppendingPathComponent:@"Desktop/Log.txt"])
+
 static int quit_flag = 0;
 
 void print_usage(int argc, char **argv);
 
-static char* udid = NULL;
+static char * udid = NULL;
 
 static idevice_t device = NULL;
 static syslog_relay_client_t syslog = NULL;
 
+static NSMutableString * processName = [[NSMutableString alloc]init];
+static NSMutableString * mstr = [[NSMutableString alloc]init];
+
+static BOOL pU = NO;
+static BOOL pP = NO;
+static BOOL pO = NO;
+
+BOOL logGo = NO;
+
+void writefile(NSString * string )
+{
+    
+    NSString *filePath = LogPath;
+    
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    
+    if(![fileManager fileExistsAtPath:filePath])
+    {
+        NSString *str = @"start";
+        [str writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        
+    }
+    
+    NSFileHandle *fileHandle = [NSFileHandle fileHandleForUpdatingAtPath:filePath];
+    
+    [fileHandle seekToEndOfFile];
+    
+    NSData* stringData  = [string dataUsingEncoding:NSUTF8StringEncoding];
+    
+    [fileHandle writeData:stringData]; //追加写入数据
+    
+    [fileHandle closeFile];
+}
+
+
 static void syslog_callback(char c, void *user_data)
 {
-    putchar(c);
+    
+    [mstr appendFormat:@"%c",c];
     if (c == '\n') {
-        fflush(stdout);
+        
+        
+        if([[mstr lowercaseString] rangeOfString:@"["].location!=NSNotFound&&
+           [[mstr lowercaseString] rangeOfString:@"]"].location!=NSNotFound&&
+           [[mstr lowercaseString] rangeOfString:@"<"].location!=NSNotFound&&
+           [[mstr lowercaseString] rangeOfString:@">"].location!=NSNotFound)
+        {
+            logGo = NO;
+            
+        }
+        if(processName.length>0)
+        {
+            if([[mstr lowercaseString] rangeOfString:[processName lowercaseString]].location!=NSNotFound)
+            {
+                logGo = YES;
+            }
+            
+        }else
+        {
+            logGo = YES;
+        }
+        
+        
+        if(logGo)
+        {
+            printf("%s",[mstr UTF8String]);
+            fflush(stdout);
+            if(pO)
+            {
+                writefile(mstr);
+            }
+           
+        }
+
+        [mstr setString:@""];
     }
 }
 
@@ -72,6 +145,7 @@ static int start_logging(void)
     }
     
     fprintf(stdout, "[connected]\n");
+    
     fflush(stdout);
     
     return 0;
@@ -122,9 +196,30 @@ static void clean_exit(int sig)
     quit_flag++;
 }
 
+static void startlog()
+{
+    int num = 0;
+    char **devices = NULL;
+    idevice_get_device_list(&devices, &num);
+    idevice_device_list_free(devices);
+    if (num == 0) {
+        if (!udid) {
+            fprintf(stderr, "No device found. Plug in a device or pass UDID with -u to wait for device to be available.\n");
+            
+        } else {
+            fprintf(stderr, "Waiting for device with UDID %s to become available...\n", udid);
+        }
+    }
+    
+    idevice_event_subscribe(device_event_cb, NULL);
+    
+
+}
+
+
 int main(int argc, char *argv[])
 {
-    int i;
+  
     
     signal(SIGINT, clean_exit);
     signal(SIGTERM, clean_exit);
@@ -133,56 +228,74 @@ int main(int argc, char *argv[])
     signal(SIGPIPE, SIG_IGN);
 #endif
     
-    /* parse cmdline args */
-    for (i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--debug")) {
-            idevice_set_debug_level(1);
-            continue;
-        }
-        else if (!strcmp(argv[i], "-u") || !strcmp(argv[i], "--udid")) {
-            i++;
-            if (!argv[i] || (strlen(argv[i]) != 40)) {
-                print_usage(argc, argv);
-                return 0;
+    NSLog(@"%@",NSHomeDirectory());
+    if(argc == 1)
+    {
+        print_usage(argc, argv);
+        return 0;
+    }
+    
+    NSArray * arguments = [[NSProcessInfo processInfo]arguments];
+   
+    
+    
+    for (int j =1 ; j<arguments.count; j++) {
+        
+        idevice_set_debug_level(1);
+        
+        NSString * op1 = arguments[j];
+        if([[op1 lowercaseString] isEqualToString:@"-u"])
+        {
+            j++;
+            if(j < arguments.count)
+            {
+                NSString * op2 = arguments[j];
+                if(op2.length == 40)
+                {
+                    pU = YES;
+                    udid =(char *)[op2 UTF8String];
+                    continue;
+                }
             }
-            udid = strdup(argv[i]);
-            continue;
         }
-        else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            print_usage(argc, argv);
-            return 0;
+        if([[op1 lowercaseString] isEqualToString:@"-p"])
+        {
+            j++;
+            if(j < arguments.count)
+            {
+                NSString * op2 = arguments[j];
+                if(op2.length > 0)
+                {
+                    pP =YES;
+                    [processName setString:op2];
+                }
+            }
         }
-        else {
-            print_usage(argc, argv);
-            return 0;
+        if([[op1 lowercaseString] isEqualToString:@"-o"])
+        {
+            pO = YES;
         }
+        
     }
     
-    int num = 0;
-    char **devices = NULL;
-    idevice_get_device_list(&devices, &num);
-    idevice_device_list_free(devices);
-    if (num == 0) {
-        if (!udid) {
-            fprintf(stderr, "No device found. Plug in a device or pass UDID with -u to wait for device to be available.\n");
-            return -1;
-        } else {
-            fprintf(stderr, "Waiting for device with UDID %s to become available...\n", udid);
+    if(pU&&pP)
+    {
+        startlog();
+        
+        while (!quit_flag) {
+            sleep(1);
         }
+        
+        idevice_event_unsubscribe();
+        stop_logging();
+        
     }
     
-    idevice_event_subscribe(device_event_cb, NULL);
-    
-    while (!quit_flag) {
-        sleep(1);
-    }
-    idevice_event_unsubscribe();
-    stop_logging();
     
     if (udid) {
         free(udid);
     }
-    
+        
     return 0;
 }
 
@@ -196,6 +309,7 @@ void print_usage(int argc, char **argv)
     printf("  -d, --debug\t\tenable communication debugging\n");
     printf("  -u, --udid UDID\ttarget specific device by its 40-digit device UDID\n");
     printf("  -h, --help\t\tprints usage information\n");
+    printf("  -u , -p --uuid And Process");
     printf("\n");
     //    printf("Homepage: <" PACKAGE_URL ">\n");
 }
